@@ -43,7 +43,7 @@ effect WriteRegister(Registers reg, char val) {
 
 clockable LDA(char param) {
     co_yield{ WriteBus(Bus::Addr, param) };         // Cycle 1: Write to bus
-    co_yield{};                                     // NOP on latency
+    co_yield{};                                     // NOP on memory read latency
 
     auto data = ReadBus(Bus::Data);
     co_yield{ WriteRegister(Registers::A, data) }; // Cycle 3: Write to register
@@ -57,8 +57,6 @@ clockable STA(char param) {
         WriteBus(Bus::Data, data)
     };
     co_yield{};                                     // Cycle 2: NOP on latency
-
-    co_yield{ WriteRegister(Registers::A, param) };
 }
 
 clockable Add(char param) {
@@ -76,29 +74,29 @@ clockable Print(char param) {
 
 clockable Halt(char param) {
     end = true;
-    co_yield{};
+    co_yield{};                                     // Generator has to have at least one yield
 }
 
-std::vector<clockable_func> CPUOps = { LDA, STA, Add, Print, Halt };
+std::vector<clockable_func> CPUOps = { LDA, STA, Add, Print, Halt }; // Simple opcode lookup table
 
 clockable CPU() {
-    co_yield{};
+    co_yield{};                                     // This clock will be read on initialization and any effects ignored
     while (true) {
         auto pc = ReadRegister(Registers::PC);
 
-        co_yield{
+        co_yield{                                   // Start PC opcode read
             WriteBus(Bus::WriteBit, 0),
             WriteBus(Bus::Addr, pc)
         };
 
-        pc++;
+        pc++;                                       // Start PC+1 opcode read, mask PC read latency
         co_yield{ WriteBus(Bus::Addr, pc) };
 
-        auto opcode = ReadBus(Bus::Data);
+        auto opcode = ReadBus(Bus::Data);           // Read PC opcode from bus
         co_yield{};
 
-        auto param = ReadBus(Bus::Data);
-        clockable_call(CPUOps[opcode], param);
+        auto param = ReadBus(Bus::Data);            // Read PC+1 opcode from bus
+        clockable_call(CPUOps[opcode], param);      // Execute operation
 
         pc++;
         co_yield{ WriteRegister(Registers::PC, pc) };
@@ -125,14 +123,14 @@ clockable Memory() {
         if (write) {
             auto data = ReadBus(Bus::Data);
             mem[addr] = data;
-            co_yield{};
+            co_yield{}; // 1 Cycle write latency
         }
 
         co_yield{ WriteBus(Bus::Data, mem[addr]) };
     }
 }
 
-// ----------- Memory implementation
+// ----------- Execution loop
 
 int main()
 {
