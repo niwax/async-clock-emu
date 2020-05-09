@@ -10,34 +10,26 @@
 struct effect {
     bool wBus[3];
     bool wRegisters[2];
-    char vBus[3];
-    char vRegisters[2];
+    unsigned char vBus[3];
+    unsigned char vRegisters[2];
 
     void Apply();
 };
 
 effect operator+(effect const& lhs, effect const& rhs) {
-    effect total = { 0 };
+    effect total = lhs;
 
     for (int i = 0; i < 3; i++) {
-        total.wBus[i] = lhs.wBus[i] || rhs.wBus[i];
-
         if (rhs.wBus[i]) {
+            total.wBus[i] = true;
             total.vBus[i] = rhs.vBus[i];
-        }
-        else {
-            total.vBus[i] = lhs.vBus[i];
         }
     }
 
     for (int i = 0; i < 2; i++) {
-        total.wRegisters[i] = lhs.wRegisters[i] || rhs.wRegisters[i];
-
         if (rhs.wRegisters[i]) {
+            total.wRegisters[i] = true;
             total.vRegisters[i] = rhs.vRegisters[i];
-        }
-        else {
-            total.vRegisters[i] = lhs.vRegisters[i];
         }
     }
 
@@ -45,20 +37,20 @@ effect operator+(effect const& lhs, effect const& rhs) {
 }
 
 typedef std::experimental::generator<effect> clockable;
-typedef std::function<clockable(char)> clockable_func;
+typedef std::function<clockable(unsigned char)> clockable_func;
 #define clockable_call(func, param) for (auto val : func(param)) { co_yield val; }
 #define clock(func, effects) func++; auto eff = *func; effects = effects + eff;
 
-// #define CONSOLE_OUTPUT // Allow console output in CPU Ops
+#define CONSOLE_OUTPUT // Allow console output in CPU Ops
 
 // ----------- System definition
 
 bool end = false;
 
-char bus[] = { 0, 0, 0 };
+unsigned char bus[] = { 0, 0, 0 };
 enum Bus { Addr = 0, Data = 1, WriteBit = 2 };
 
-char registers[] = { 0, 0 };
+unsigned char registers[] = { 0, 0 };
 enum Registers { A = 0, PC = 1 };
 
 void effect::Apply() {
@@ -74,11 +66,11 @@ void effect::Apply() {
     }
 };
 
-char ReadBus(Bus reg) {
+unsigned char ReadBus(Bus reg) {
     return bus[reg];
 }
 
-effect WriteBus(Bus reg, char val) {
+effect WriteBus(Bus reg, unsigned char val) {
     effect e = { 0 };
 
     e.wBus[reg] = true;
@@ -87,11 +79,11 @@ effect WriteBus(Bus reg, char val) {
     return e;
 }
 
-char ReadRegister(Registers reg) {
+unsigned char ReadRegister(Registers reg) {
     return registers[reg];
 }
 
-effect WriteRegister(Registers reg, char val) {
+effect WriteRegister(Registers reg, unsigned char val) {
     effect e = { 0 };
 
     e.wRegisters[reg] = true;
@@ -107,7 +99,7 @@ effect EmptyEffect() {
 
 // ----------- CPU implementation
 
-clockable LDA(char param) {
+clockable LDA(unsigned char param) {
     co_yield WriteBus(Bus::Addr, param);            // Cycle 1: Write to bus
     co_yield EmptyEffect();                         // NOP on memory read latency
 
@@ -115,15 +107,14 @@ clockable LDA(char param) {
     co_yield WriteRegister(Registers::A, data);     // Cycle 3: Write to register
 }
 
-clockable STA(char param) {
+clockable STA(unsigned char param) {
     auto data = ReadRegister(Registers::A);
     co_yield WriteBus(Bus::WriteBit, 1) +           // Cycle 1: Write to bus
              WriteBus(Bus::Addr, param) +
              WriteBus(Bus::Data, data);
-    co_yield EmptyEffect();                         // Cycle 2: NOP on latency
 }
 
-clockable Add(char param) {
+clockable Add(unsigned char param) {
     co_yield WriteBus(Bus::Addr, param);            // Cycle 1: Write to bus
     co_yield EmptyEffect();                         // NOP on latency
 
@@ -131,7 +122,7 @@ clockable Add(char param) {
     co_yield WriteRegister(Registers::A, data);     // Cycle 3: Write to register
 }
 
-clockable Print(char param) {
+clockable Print(unsigned char param) {
 #ifdef CONSOLE_OUTPUT
     std::cout << "PRINT: " << (int)ReadRegister(Registers::A) << std::endl;
 #endif
@@ -139,16 +130,40 @@ clockable Print(char param) {
     co_yield EmptyEffect();
 }
 
-clockable Halt(char param) {
+clockable Halt(unsigned char param) {
     end = true;
     co_yield EmptyEffect();                         // Generator has to have at least one yield
 }
 
-clockable JMP(char param) {
+clockable EQ(unsigned char param) {
+    co_yield WriteBus(Bus::Addr, param);            // Cycle 1: Write to bus
+    co_yield EmptyEffect();                         // NOP on latency
+
+    auto a = ReadRegister(Registers::A);
+    auto data = ReadBus(Bus::Data);
+    unsigned char cmp = (a == data);
+
+    co_yield WriteRegister(Registers::A, cmp);
+}
+
+clockable JMP(unsigned char param) {
     co_yield WriteRegister(Registers::PC, param);
 }
 
-std::vector<clockable_func> CPUOps = { LDA, STA, Add, Print, Halt, JMP }; // Simple opcode lookup table
+clockable JZ(unsigned char param) {
+    auto pc = ReadRegister(Registers::PC);
+    auto a = ReadRegister(Registers::A);
+
+    if (a == 0) {
+        co_yield WriteRegister(Registers::PC, param);
+    }
+    else {
+        pc += 2;
+        co_yield WriteRegister(Registers::PC, pc);
+    }
+}
+
+std::vector<clockable_func> CPUOps = { LDA, STA, Add, Print, Halt, EQ, JMP, JZ }; // Simple opcode lookup table
 
 clockable CPU() {
     co_yield EmptyEffect();                         // This clock will be read on initialization and any effects ignored
@@ -167,7 +182,7 @@ clockable CPU() {
         auto param = ReadBus(Bus::Data);            // Read PC+1 opcode from bus
         clockable_call(CPUOps[opcode], param);      // Execute operation
 
-        if (opcode != 5) {
+        if (opcode < 6) {
             pc++;
             co_yield WriteRegister(Registers::PC, pc);
         }
@@ -177,14 +192,16 @@ clockable CPU() {
 // ----------- Memory implementation
 
 clockable Memory() {
-    // Program to add 42 + 73
-    char mem[] = {
-        0, 8, // LOAD A (#8)
-        2, 9, // ADD (#9)
-        3, 0, // PRINT A
-        5, 0, // JMP 0
-        4, 0, // HALT
-        42, 73
+    // Simple counter to print 0-255
+    unsigned char mem[] = {
+        0, 14,      // LDA (#14)
+        2, 15,      // ADD (#15)
+        3, 0,       // PRINT
+        1, 14,      // STA (#14)
+        5, 16,      // EQ 16
+        7, 0,       // JZ 0
+        4, 0,       // HALT
+        0, 1, 255   // data section
     };
 
     co_yield EmptyEffect();
@@ -195,7 +212,6 @@ clockable Memory() {
         if (write) {
             auto data = ReadBus(Bus::Data);
             mem[addr] = data;
-            co_yield{}; // 1 Cycle write latency
         }
 
         co_yield WriteBus(Bus::Data, mem[addr]);
