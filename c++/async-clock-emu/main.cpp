@@ -1,9 +1,10 @@
 #include <iostream>
-#include <vector>
+#include <array>
 #include <list>
 #include <experimental/generator>
 #include <functional>
 #include <chrono>
+#include "code.h"
 
 // ----------- Utility functions
 
@@ -163,7 +164,7 @@ clockable JZ(unsigned char param) {
     }
 }
 
-std::vector<clockable_func> CPUOps = { LDA, STA, Add, Print, Halt, EQ, JMP, JZ }; // Simple opcode lookup table
+const std::array<const clockable_func, 8> CPUOps = { LDA, STA, Add, Print, Halt, EQ, JMP, JZ }; // Simple opcode lookup table
 
 clockable CPU() {
     co_yield EmptyEffect();                         // This clock will be read on initialization and any effects ignored
@@ -182,7 +183,7 @@ clockable CPU() {
         auto param = ReadBus(Bus::Data);            // Read PC+1 opcode from bus
         clockable_call(CPUOps[opcode], param);      // Execute operation
 
-        if (opcode < 6) {
+        if (opcode < 6) {                           // Don't modify PC on jumps
             pc++;
             co_yield WriteRegister(Registers::PC, pc);
         }
@@ -192,17 +193,8 @@ clockable CPU() {
 // ----------- Memory implementation
 
 clockable Memory() {
-    // Simple counter to print 0-255
-    unsigned char mem[] = {
-        0, 14,      // LDA (#14)
-        2, 15,      // ADD (#15)
-        3, 0,       // PRINT
-        1, 14,      // STA (#14)
-        5, 16,      // EQ 16
-        7, 0,       // JZ 0
-        4, 0,       // HALT
-        0, 1, 255   // data section
-    };
+    // Initialize from code.h
+    auto mem = initMem;
 
     co_yield EmptyEffect();
     while (true) {
@@ -226,7 +218,7 @@ int main()
 
     auto memory = Memory();
     auto cpu = CPU();
-    auto components = { memory.begin(), cpu.begin() };
+    const auto components = { memory.begin(), cpu.begin() };
 
     int clocks = 0;
     auto start = high_resolution_clock::now();
